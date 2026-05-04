@@ -1202,6 +1202,28 @@ img {
     margin-bottom: 20px;
 }
 
+/* Honeypot field — visually hidden but reachable so bots will fill it */
+.sessionale-contact-form .contact-hp-field {
+    position: absolute !important;
+    left: -10000px !important;
+    top: auto;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+}
+
+.sessionale-contact-form .contact-recaptcha-notice {
+    margin-top: 20px;
+    font-size: 12px;
+    color: var(--color-text-muted);
+    line-height: 1.5;
+}
+
+.sessionale-contact-form .contact-recaptcha-notice a {
+    color: inherit;
+    text-decoration: underline;
+}
+
 /* ==========================================================================
    Contact Page Layout
    ========================================================================== */

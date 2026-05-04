@@ -1970,6 +1970,7 @@ function sessionale_contact_form_shortcode() {
     $success = isset($_GET['contact']) && $_GET['contact'] === 'success';
     $error = isset($_GET['contact']) && $_GET['contact'] === 'error';
     $recaptcha_site_key = isset($settings['recaptcha_site_key']) ? $settings['recaptcha_site_key'] : '';
+    $form_loaded_at = time();
 
     ob_start();
     ?>
@@ -1991,6 +1992,12 @@ function sessionale_contact_form_shortcode() {
                 <input type="hidden" name="action" value="sessionale_contact_submit">
                 <?php wp_nonce_field('sessionale_contact_form', 'contact_nonce'); ?>
                 <input type="hidden" name="recaptcha_token" id="recaptcha_token" value="">
+                <input type="hidden" name="contact_form_time" value="<?php echo esc_attr($form_loaded_at); ?>">
+
+                <div class="contact-hp-field" aria-hidden="true">
+                    <label for="contact_website"><?php _e('Website (leave empty)', 'sessionale-portfolio'); ?></label>
+                    <input type="text" name="contact_website" id="contact_website" tabindex="-1" autocomplete="off" value="">
+                </div>
 
                 <div class="form-group">
                     <label for="contact_name"><?php _e('Name', 'sessionale-portfolio'); ?> *</label>
@@ -2010,19 +2017,46 @@ function sessionale_contact_form_shortcode() {
                 <div class="form-group">
                     <button type="submit" class="submit-button"><?php _e('Submit', 'sessionale-portfolio'); ?></button>
                 </div>
+
+                <?php if (!empty($recaptcha_site_key)) : ?>
+                    <p class="contact-recaptcha-notice">
+                        <?php
+                        printf(
+                            /* translators: %1$s and %2$s are opening/closing anchor tags for Google's privacy policy and terms */
+                            esc_html__('This site is protected by reCAPTCHA and the Google %1$sPrivacy Policy%2$s and %3$sTerms of Service%4$s apply.', 'sessionale-portfolio'),
+                            '<a href="https://policies.google.com/privacy" target="_blank" rel="noopener noreferrer">',
+                            '</a>',
+                            '<a href="https://policies.google.com/terms" target="_blank" rel="noopener noreferrer">',
+                            '</a>'
+                        );
+                        ?>
+                    </p>
+                <?php endif; ?>
             </form>
             <?php if (!empty($recaptcha_site_key)) : ?>
             <script>
-                document.getElementById('sessionale-contact-form').addEventListener('submit', function(e) {
-                    e.preventDefault();
-                    var form = this;
-                    grecaptcha.ready(function() {
-                        grecaptcha.execute('<?php echo esc_js($recaptcha_site_key); ?>', {action: 'contact_form'}).then(function(token) {
-                            document.getElementById('recaptcha_token').value = token;
+                (function () {
+                    var form = document.getElementById('sessionale-contact-form');
+                    if (!form) return;
+                    var submitting = false;
+                    form.addEventListener('submit', function (e) {
+                        if (submitting) return;
+                        e.preventDefault();
+                        submitting = true;
+                        if (typeof grecaptcha === 'undefined') {
                             form.submit();
+                            return;
+                        }
+                        grecaptcha.ready(function () {
+                            grecaptcha.execute('<?php echo esc_js($recaptcha_site_key); ?>', { action: 'contact_form' }).then(function (token) {
+                                document.getElementById('recaptcha_token').value = token;
+                                form.submit();
+                            }).catch(function () {
+                                form.submit();
+                            });
                         });
                     });
-                });
+                })();
             </script>
             <?php endif; ?>
         <?php endif; ?>
@@ -2036,46 +2070,87 @@ add_shortcode('sessionale_contact_form', 'sessionale_contact_form_shortcode');
  * Handle Contact Form Submission
  */
 function sessionale_handle_contact_submission() {
-    if (!wp_verify_nonce($_POST['contact_nonce'], 'sessionale_contact_form')) {
-        wp_die(__('Security check failed', 'sessionale-portfolio'));
+    $referer = wp_get_referer();
+    if (!$referer) {
+        $referer = home_url('/');
+    }
+
+    // Silent success redirect for spam — bots shouldn't learn they were caught.
+    $silent_success = function () use ($referer) {
+        wp_safe_redirect(add_query_arg('contact', 'success', $referer));
+        exit;
+    };
+    $error_redirect = function () use ($referer) {
+        wp_safe_redirect(add_query_arg('contact', 'error', $referer));
+        exit;
+    };
+
+    if (empty($_POST['contact_nonce']) || !wp_verify_nonce($_POST['contact_nonce'], 'sessionale_contact_form')) {
+        error_log('[sessionale-contact] rejected: nonce failure');
+        $error_redirect();
+    }
+
+    // Honeypot: real users never fill this hidden field.
+    if (!empty($_POST['contact_website'])) {
+        error_log('[sessionale-contact] rejected: honeypot tripped');
+        $silent_success();
+    }
+
+    // Time trap: forms submitted in under 3 seconds are almost certainly bots.
+    $form_time = isset($_POST['contact_form_time']) ? absint($_POST['contact_form_time']) : 0;
+    if ($form_time <= 0 || (time() - $form_time) < 3) {
+        error_log('[sessionale-contact] rejected: submitted too fast');
+        $silent_success();
     }
 
     $settings = get_option('sessionale_portfolio_settings', array());
-    
+
     // Verify reCAPTCHA if configured
     $recaptcha_secret_key = isset($settings['recaptcha_secret_key']) ? $settings['recaptcha_secret_key'] : '';
     if (!empty($recaptcha_secret_key)) {
         $recaptcha_token = isset($_POST['recaptcha_token']) ? sanitize_text_field($_POST['recaptcha_token']) : '';
-        
+
         if (empty($recaptcha_token)) {
-            wp_die(__('reCAPTCHA verification failed. Please try again.', 'sessionale-portfolio'));
+            error_log('[sessionale-contact] rejected: missing reCAPTCHA token');
+            $silent_success();
         }
-        
+
         $recaptcha_response = wp_remote_post('https://www.google.com/recaptcha/api/siteverify', array(
+            'timeout' => 10,
             'body' => array(
                 'secret' => $recaptcha_secret_key,
                 'response' => $recaptcha_token,
-                'remoteip' => $_SERVER['REMOTE_ADDR']
-            )
+                'remoteip' => isset($_SERVER['REMOTE_ADDR']) ? $_SERVER['REMOTE_ADDR'] : '',
+            ),
         ));
-        
+
         if (is_wp_error($recaptcha_response)) {
-            wp_die(__('reCAPTCHA verification failed. Please try again.', 'sessionale-portfolio'));
+            error_log('[sessionale-contact] reCAPTCHA HTTP error: ' . $recaptcha_response->get_error_message());
+            $error_redirect();
         }
-        
+
         $recaptcha_data = json_decode(wp_remote_retrieve_body($recaptcha_response), true);
-        
-        // Check if verification was successful and score is acceptable (0.5 or higher)
-        if (!$recaptcha_data['success'] || (isset($recaptcha_data['score']) && $recaptcha_data['score'] < 0.5)) {
-            wp_die(__('reCAPTCHA verification failed. Your submission appears to be spam.', 'sessionale-portfolio'));
+        $score = isset($recaptcha_data['score']) ? (float) $recaptcha_data['score'] : null;
+        $action = isset($recaptcha_data['action']) ? $recaptcha_data['action'] : '';
+
+        if (empty($recaptcha_data['success']) || ($score !== null && $score < 0.5) || ($action !== '' && $action !== 'contact_form')) {
+            error_log('[sessionale-contact] rejected: reCAPTCHA score=' . ($score === null ? 'n/a' : $score) . ' action=' . $action);
+            $silent_success();
         }
     }
-    
+
     $to_email = !empty($settings['owner_email']) ? $settings['owner_email'] : get_option('admin_email');
 
-    $name = sanitize_text_field($_POST['contact_name']);
-    $email = sanitize_email($_POST['contact_email']);
-    $message = sanitize_textarea_field($_POST['contact_message']);
+    $name = sanitize_text_field(isset($_POST['contact_name']) ? $_POST['contact_name'] : '');
+    $email = sanitize_email(isset($_POST['contact_email']) ? $_POST['contact_email'] : '');
+    $message = sanitize_textarea_field(isset($_POST['contact_message']) ? $_POST['contact_message'] : '');
+
+    if ($name === '' || !is_email($email) || $message === '') {
+        $error_redirect();
+    }
+
+    // Strip CR/LF defensively to prevent header injection via the Reply-To name.
+    $reply_name = preg_replace('/[\r\n]+/', ' ', $name);
 
     // Setup From address - use configured email or fallback to noreply@domain
     $site_host = wp_parse_url(home_url(), PHP_URL_HOST);
@@ -2093,7 +2168,7 @@ function sessionale_handle_contact_submission() {
     );
     $owner_headers = array(
         'From: ' . $site_name . ' <' . $from_address . '>',
-        'Reply-To: ' . $name . ' <' . $email . '>'
+        'Reply-To: ' . $reply_name . ' <' . $email . '>'
     );
 
     // Email copy to visitor
@@ -2110,15 +2185,13 @@ function sessionale_handle_contact_submission() {
 
     // Send both emails
     $owner_mail_sent = wp_mail($to_email, $owner_subject, $owner_body, $owner_headers);
-    $visitor_mail_sent = wp_mail($email, $visitor_subject, $visitor_body, $visitor_headers);
+    wp_mail($email, $visitor_subject, $visitor_body, $visitor_headers);
 
-    // Redirect back to contact page with appropriate message
     if ($owner_mail_sent) {
-        $redirect_url = add_query_arg('contact', 'success', wp_get_referer());
+        wp_safe_redirect(add_query_arg('contact', 'success', $referer));
     } else {
-        $redirect_url = add_query_arg('contact', 'error', wp_get_referer());
+        wp_safe_redirect(add_query_arg('contact', 'error', $referer));
     }
-    wp_redirect($redirect_url);
     exit;
 }
 add_action('admin_post_sessionale_contact_submit', 'sessionale_handle_contact_submission');
