@@ -16,6 +16,9 @@ require_once get_template_directory() . '/inc/class-portfolio-import.php';
 // Load the portfolio gallery meta box
 require_once get_template_directory() . '/inc/class-portfolio-gallery.php';
 
+// Load the per-page portfolio order meta box
+require_once get_template_directory() . '/inc/class-portfolio-page-order.php';
+
 // Load TGM Plugin Activation
 require_once get_template_directory() . '/inc/class-tgm-plugin-activation.php';
 require_once get_template_directory() . '/inc/tgmpa-register.php';
@@ -1612,10 +1615,22 @@ function sessionale_portfolio_shortcode($atts) {
         return '<p>' . __('No projects found.', 'sessionale-portfolio') . '</p>';
     }
 
+    // Apply the per-page custom order, if the current page defines one.
+    $posts = $query->posts;
+    $page_id = get_the_ID();
+    if ($page_id) {
+        $saved_order = get_post_meta($page_id, '_portfolio_order', true);
+        $posts = Sessionale_Portfolio_Page_Order::apply_saved_order($posts, $saved_order);
+    }
+
     ob_start();
+
+    // Loop over the reordered list. Declared global so the template tags below
+    // resolve against each item as we set it up.
+    global $post;
     ?>
     <div class="portfolio-grid columns-<?php echo esc_attr($atts['columns']); ?>">
-        <?php while ($query->have_posts()) : $query->the_post();
+        <?php foreach ($posts as $post) : setup_postdata($post);
             $year = get_post_meta(get_the_ID(), 'portfolio_year', true);
         ?>
             <article class="portfolio-item">
@@ -1635,7 +1650,7 @@ function sessionale_portfolio_shortcode($atts) {
                     </div>
                 </a>
             </article>
-        <?php endwhile; ?>
+        <?php endforeach; ?>
     </div>
     <?php
     wp_reset_postdata();
