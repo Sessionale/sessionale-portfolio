@@ -40,7 +40,7 @@ class Portfolio_Gallery {
                 'portfolio-gallery-admin',
                 get_template_directory_uri() . '/js/admin-gallery.js',
                 array('jquery', 'jquery-ui-sortable'),
-                '1.0.0',
+                '1.1.2',
                 true
             );
             wp_localize_script('portfolio-gallery-admin', 'portfolioGallery', array(

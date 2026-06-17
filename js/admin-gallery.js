@@ -216,7 +216,11 @@
             '<input type="hidden" class="item-data" value="">' +
         '</div>';
 
-        return $(html);
+        var $el = $(html);
+        // Persist the full item (full-size url, attachment_id, dimensions) so that
+        // updateGalleryData() reads it back instead of falling back to the thumbnail src.
+        $el.find('.item-data').val(JSON.stringify(item));
+        return $el;
     }
 
     function updateGalleryData() {
