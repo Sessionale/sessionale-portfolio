@@ -17,22 +17,23 @@ if (!defined('ABSPATH')) {
 class Sessionale_Portfolio_Page_Order {
 
     public function __construct() {
-        add_action('add_meta_boxes', array($this, 'add_order_meta_box'));
+        add_action('add_meta_boxes', array($this, 'add_order_meta_box'), 10, 2);
         add_action('save_post_page', array($this, 'save_order_meta'));
         add_action('admin_enqueue_scripts', array($this, 'enqueue_admin_scripts'));
     }
 
     /**
      * Register the meta box, but only on pages tied to a portfolio category.
+     *
+     * @param string  $post_type Current post type.
+     * @param WP_Post $post      Current post object.
      */
-    public function add_order_meta_box() {
-        $screen = get_current_screen();
-        if (!$screen || $screen->post_type !== 'page') {
+    public function add_order_meta_box($post_type, $post) {
+        if ($post_type !== 'page') {
             return;
         }
 
-        $post_id = $this->get_current_post_id();
-        if (!$post_id || !$this->get_page_category($post_id)) {
+        if (!$post || !$this->get_page_category($post->ID)) {
             return;
         }
 
@@ -171,10 +172,26 @@ class Sessionale_Portfolio_Page_Order {
 
     /**
      * Resolve the portfolio category slug a page is bound to.
+     *
+     * Prefers the `_portfolio_category` meta (set on theme-created category
+     * pages), and falls back to parsing the category attribute out of the
+     * [sessionale_portfolio category="..."] shortcode in the page content, so
+     * it also works on pages that were built by hand.
      */
     private function get_page_category($post_id) {
         $category = get_post_meta($post_id, '_portfolio_category', true);
-        return !empty($category) ? $category : '';
+        if (!empty($category)) {
+            return $category;
+        }
+
+        $content = get_post_field('post_content', $post_id);
+        if ($content && has_shortcode($content, 'sessionale_portfolio')) {
+            if (preg_match('/\[sessionale_portfolio[^\]]*\bcategory\s*=\s*(["\'])(.*?)\1/', $content, $matches)) {
+                return $matches[2];
+            }
+        }
+
+        return '';
     }
 
     /**
@@ -240,19 +257,6 @@ class Sessionale_Portfolio_Page_Order {
         }
 
         return $ordered;
-    }
-
-    /**
-     * Best-effort current post ID inside the admin editor.
-     */
-    private function get_current_post_id() {
-        if (isset($_GET['post'])) {
-            return absint($_GET['post']);
-        }
-        if (isset($_POST['post_ID'])) {
-            return absint($_POST['post_ID']);
-        }
-        return 0;
     }
 }
 
